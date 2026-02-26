@@ -1,43 +1,39 @@
-```markdown
-# 🧠 Sentiment Engine
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge" />
-  <img src="https://img.shields.io/github/stars/ParthChauhan1658/Sentiment-engine?style=for-the-badge" />
-  <img src="https://img.shields.io/github/forks/ParthChauhan1658/Sentiment-engine?style=for-the-badge" />
-</p>
-
-<p align="center">
-  A powerful and lightweight sentiment analysis engine that classifies text into <b>Positive</b>, <b>Negative</b>, or <b>Neutral</b> sentiments using NLP and Machine Learning.
-</p>
-
----
-
-## 📌 Table of Contents
-
-- [About](#-about)
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [API Endpoints](#-api-endpoints)
-- [Screenshots](#-screenshots)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Contact](#-contact)
-
----
-
+```
+Sentiment-engine/
+│
+├── data/                       # Dataset files
+│   ├── train.csv
+│   └── test.csv
+│
+├── models/                     # Trained ML models
+│   └── sentiment_model.pkl
+│
+├── notebooks/                  # Jupyter notebooks for EDA
+│   └── analysis.ipynb
+│
+├── src/                        # Source code
+│   ├── preprocess.py           # Text preprocessing
+│   ├── train.py                # Model training
+│   ├── predict.py              # Prediction logic
+│   └── utils.py                # Helper functions
+│
+├── static/                     # Static files (CSS, JS)
+├── templates/                  # HTML templates
+│
+├── app.py                      # Main application file
+├── requirements.txt            # Python dependencies
+├── Dockerfile                  # Docker configuration
+├── .gitignore                  # Git ignore file
+├── LICENSE                     # License file
+└── README.md                   # Project documentation
+```
 ## 📖 About
 
 **Sentiment Engine** is a Natural Language Processing (NLP) based project that analyzes the sentiment of user-provided text. It processes textual data and classifies it as **Positive**, **Negative**, or **Neutral** — useful for product reviews, social media monitoring, customer feedback analysis, and more.
 
 ---
 
-## ✨ Features
+# Features
 
 - ✅ Real-time sentiment analysis
 - ✅ Supports multiple text inputs (single & batch)
@@ -50,7 +46,7 @@
 
 ---
 
-## 🛠️ Tech Stack
+# Tech Stack
 
 | Category            | Technology                        |
 |---------------------|-----------------------------------|
@@ -64,39 +60,6 @@
 
 ---
 
-## 📂 Project Structure
-
-```
-Sentiment-engine/
-│
-├── 📁 data/                  # Dataset files
-│   ├── train.csv
-│   └── test.csv
-│
-├── 📁 models/                # Trained ML models
-│   └── sentiment_model.pkl
-│
-├── 📁 notebooks/             # Jupyter notebooks for EDA
-│   └── analysis.ipynb
-│
-├── 📁 src/                   # Source code
-│   ├── preprocess.py         # Text preprocessing
-│   ├── train.py              # Model training
-│   ├── predict.py            # Prediction logic
-│   └── utils.py              # Helper functions
-│
-├── 📁 static/                # Static files (CSS, JS)
-├── 📁 templates/             # HTML templates
-│
-├── app.py                    # Main application file
-├── requirements.txt          # Python dependencies
-├── Dockerfile                # Docker configuration
-├── .gitignore                # Git ignore file
-├── LICENSE                   # License file
-└── README.md                 # Project documentation
-```
-
----
 
 ## ⚙️ Installation
 
