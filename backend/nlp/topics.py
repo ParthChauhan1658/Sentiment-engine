@@ -1,18 +1,20 @@
 # backend/nlp/topics.py
-from nlp.translator import TranslatorService
 
 
 class TopicExtractor:
-    def __init__(self):
-        self.translator = TranslatorService()
+    def __init__(self, translator=None):
+        if translator is None:
+            from nlp.translator import TranslatorService
+            translator = TranslatorService()
+        self.translator = translator
 
         try:
             from keybert import KeyBERT
             self.model = KeyBERT()
             self.working = True
-            print("✅ Topic extractor initialized (KeyBERT)")
+            print("  Topic extractor initialized (KeyBERT)")
         except Exception as e:
-            print(f"⚠️ KeyBERT not available: {e}")
+            print(f"  KeyBERT not available: {e}")
             self.working = False
 
         # Predefined political topics to look for
@@ -34,13 +36,14 @@ class TopicExtractor:
             "media", "press", "freedom", "rights",
         ]
 
-    def extract_topics(self, text, top_n=5):
+    def extract_topics(self, text, top_n=5, language=None):
         """Extract topics — translate non-English first"""
         if not text or len(text.strip()) < 10:
             return []
 
-        # Detect language and translate if needed
-        language = self.translator.detect_language(text)
+        # Detect language only if not provided
+        if language is None:
+            language = self.translator.detect_language(text)
         analysis_text = text
 
         if language != "en":
@@ -48,7 +51,7 @@ class TopicExtractor:
                 translated = self.translator.translate_to_english(text)
                 if translated and len(translated) > 5:
                     analysis_text = translated
-            except:
+            except Exception:
                 pass
 
         # Method 1: Try KeyBERT
@@ -65,7 +68,7 @@ class TopicExtractor:
                 topics = [kw[0].lower() for kw in keywords if len(kw[0]) > 2]
                 if topics:
                     return topics
-            except:
+            except Exception:
                 pass
 
         # Method 2: Keyword matching fallback
@@ -107,14 +110,14 @@ if __name__ == "__main__":
     tests = [
         "The government should focus on water supply and road infrastructure",
         "Inflation is rising and employment is declining",
-        "मोदी जी ने नई शिक्षा नीति की घोषणा की",
+        "\u092e\u094b\u0926\u0940 \u091c\u0940 \u0928\u0947 \u0928\u0908 \u0936\u093f\u0915\u094d\u0937\u093e \u0928\u0940\u0924\u093f \u0915\u0940 \u0918\u094b\u0937\u0923\u093e \u0915\u0940",
         "Ye sarkar kuch nahi kar rahi paani ki samasya bahut badi hai",
         "Corruption is destroying our democracy",
     ]
 
-    print("\n🏷️ Topic Extraction Tests:\n")
+    print("\n  Topic Extraction Tests:\n")
     for text in tests:
         topics = extractor.extract_topics(text)
-        print(f"  📝 \"{text[:60]}...\"")
-        print(f"  🏷️  Topics: {topics}")
+        print(f"  \"{text[:60]}...\"")
+        print(f"  Topics: {topics}")
         print()

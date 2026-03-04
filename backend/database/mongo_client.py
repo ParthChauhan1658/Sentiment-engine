@@ -1,7 +1,8 @@
 # backend/database/mongo_client.py
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
 from datetime import datetime, timedelta
 import certifi
+import ssl
 import sys
 import os
 
@@ -29,6 +30,7 @@ class Database:
                 MONGODB_URI,
                 tls=True,
                 tlsCAFile=certifi.where(),
+                tlsAllowInvalidCertificates=True,
                 serverSelectionTimeoutMS=10000,
                 connectTimeoutMS=10000
             )
@@ -41,13 +43,22 @@ class Database:
             self.alerts = self.db["alerts"]
             self.constituencies = self.db["constituencies"]
 
+            # Create indexes for query performance (idempotent)
+            self.sentiments.create_index([("analyzed_at", DESCENDING)])
+            self.sentiments.create_index([("constituency", ASCENDING), ("analyzed_at", DESCENDING)])
+            self.sentiments.create_index([("sentiment", ASCENDING), ("analyzed_at", DESCENDING)])
+            self.sentiments.create_index([("source", ASCENDING)])
+            self.sentiments.create_index([("language", ASCENDING)])
+            self.raw_data.create_index([("processed", ASCENDING)])
+            self.alerts.create_index([("triggered_at", DESCENDING)])
+
             # Test connection
             self.client.admin.command("ping")
-            print("✅ MongoDB connected!")
+            print("  MongoDB connected (with indexes)!")
             self._initialized = True
 
         except Exception as e:
-            print(f"❌ MongoDB connection failed: {e}")
+            print(f"  MongoDB connection failed: {e}")
             self._initialized = False
 
     # ── SAVE OPERATIONS ──
@@ -71,7 +82,7 @@ class Database:
 
         if docs:
             result = self.raw_data.insert_many(docs)
-            print(f"✅ Saved {len(result.inserted_ids)} items from {source}")
+            print(f"  Saved {len(result.inserted_ids)} items from {source}")
             return result.inserted_ids
         return []
 
@@ -96,7 +107,7 @@ class Database:
         """Save multiple sentiment results at once"""
         if items:
             result = self.sentiments.insert_many(items)
-            print(f"✅ Saved {len(result.inserted_ids)} sentiment results")
+            print(f"  Saved {len(result.inserted_ids)} sentiment results")
             return result.inserted_ids
         return []
 
@@ -272,8 +283,8 @@ class Database:
             .limit(limit)
         )
 
-    def get_recent_sentiments(self, limit=50):
-        """Get most recent sentiment results"""
+    def get_recent_sentiments(self, limit=50, skip=0):
+        """Get most recent sentiment results with pagination"""
         return list(
             self.sentiments.find(
                 {},
@@ -282,6 +293,7 @@ class Database:
                  "constituency": 1, "topics": 1, "analyzed_at": 1}
             )
             .sort("analyzed_at", -1)
+            .skip(skip)
             .limit(limit)
         )
 
@@ -309,7 +321,7 @@ class Database:
         self.raw_data.delete_many({})
         self.sentiments.delete_many({})
         self.alerts.delete_many({})
-        print("⚠️ All data cleared!")
+        print("  All data cleared!")
 
 
 # Singleton instance

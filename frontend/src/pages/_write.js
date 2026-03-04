@@ -1,0 +1,1 @@
+const fs=require("fs");let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{fs.writeFileSync("D:/sentiment-engine/frontend/src/pages/Landing.tsx",Buffer.from(d.trim(),"base64"));console.log("Written")})

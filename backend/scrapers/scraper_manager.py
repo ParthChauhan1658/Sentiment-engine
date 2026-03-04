@@ -1,15 +1,15 @@
 # backend/scrapers/scraper_manager.py
 """
-Orchestrates all scrapers — runs them all and combines results.
+Orchestrates all scrapers — runs them in parallel and combines results.
 """
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class ScraperManager:
     def __init__(self):
-        print("\n📡 Initializing all scrapers...")
+        print("\n  Initializing all scrapers...")
 
-        # Import scrapers
         from scrapers.youtube_scraper import YouTubeScraper
         from scrapers.reddit_scraper import RedditScraper
         from scrapers.news_scraper import NewsScraper
@@ -20,10 +20,10 @@ class ScraperManager:
         self.news = NewsScraper()
         self.twitter = TwitterScraper()
 
-        print("✅ All scrapers ready!\n")
+        print("  All scrapers ready!\n")
 
     def scrape_all(self, keywords=None):
-        """Run all scrapers and combine results"""
+        """Run all scrapers in parallel and combine results"""
         if keywords is None:
             keywords = [
                 "Modi government",
@@ -36,57 +36,43 @@ class ScraperManager:
         all_data = []
         stats = {}
 
-        # 1. YouTube
-        print("\n📹 ── YouTube ──")
-        try:
-            yt_data = self.youtube.scrape_political_comments(
+        def _scrape_youtube():
+            return "youtube", self.youtube.scrape_political_comments(
                 keywords=keywords[:3], max_videos=2
             )
-            all_data.extend(yt_data)
-            stats["youtube"] = len(yt_data)
-        except Exception as e:
-            print(f"  ❌ YouTube failed: {e}")
-            stats["youtube"] = 0
 
-        # 2. Reddit
-        print("\n📝 ── Reddit ──")
-        try:
-            reddit_data = self.reddit.scrape_political_data(keywords=keywords)
-            all_data.extend(reddit_data)
-            stats["reddit"] = len(reddit_data)
-        except Exception as e:
-            print(f"  ❌ Reddit failed: {e}")
-            stats["reddit"] = 0
+        def _scrape_reddit():
+            return "reddit", self.reddit.scrape_political_data(keywords=keywords)
 
-        # 3. News
-        print("\n📰 ── News ──")
-        try:
-            news_data = self.news.scrape_all_news(keywords=keywords)
-            all_data.extend(news_data)
-            stats["news"] = len(news_data)
-        except Exception as e:
-            print(f"  ❌ News failed: {e}")
-            stats["news"] = 0
+        def _scrape_news():
+            return "news", self.news.scrape_all_news(keywords=keywords)
 
-        # 4. Twitter
-        print("\n🐦 ── Twitter ──")
-        try:
-            twitter_data = self.twitter.scrape_political_tweets(keywords=keywords[:3])
-            all_data.extend(twitter_data)
-            stats["twitter"] = len(twitter_data)
-        except Exception as e:
-            print(f"  ❌ Twitter failed: {e}")
-            stats["twitter"] = 0
+        def _scrape_twitter():
+            return "twitter", self.twitter.scrape_political_tweets(keywords=keywords[:3])
+
+        scrapers = [_scrape_youtube, _scrape_reddit, _scrape_news, _scrape_twitter]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(fn): fn.__name__ for fn in scrapers}
+
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    source, data = future.result(timeout=120)
+                    all_data.extend(data)
+                    stats[source] = len(data)
+                    print(f"  + {source}: {len(data)} items")
+                except Exception as e:
+                    print(f"  - {name} failed: {e}")
 
         # Summary
         print("\n" + "=" * 50)
-        print("📊 SCRAPING SUMMARY")
+        print("  SCRAPING SUMMARY")
         print("=" * 50)
         for source, count in stats.items():
-            emoji = "✅" if count > 0 else "❌"
+            emoji = "+" if count > 0 else "-"
             print(f"  {emoji} {source:>10}: {count} items")
-        print(f"  {'─' * 30}")
-        print(f"  📦 Total: {len(all_data)} items")
+        print(f"  Total: {len(all_data)} items")
         print("=" * 50)
 
         return all_data, stats
@@ -105,7 +91,7 @@ class ScraperManager:
         elif source == "twitter":
             return self.twitter.scrape_political_tweets(keywords=keywords)
         else:
-            print(f"❌ Unknown source: {source}")
+            print(f"  Unknown source: {source}")
             return []
 
 

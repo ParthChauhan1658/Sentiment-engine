@@ -6,6 +6,7 @@ import re
 class TranslatorService:
     def __init__(self):
         self.translator = GoogleTranslator(source="auto", target="en")
+        self._translators = {"en": self.translator}
 
         # Common Hinglish words to detect Roman Hindi
         self.hinglish_words = {
@@ -34,7 +35,7 @@ class TranslatorService:
             "pe", "tak", "ab", "jab", "tab",
         }
 
-        print("✅ Translator initialized (deep-translator + Hinglish detection)")
+        print("  Translator initialized (deep-translator + Hinglish detection)")
 
     def translate_to_english(self, text):
         if not text or len(text.strip()) < 2:
@@ -43,17 +44,18 @@ class TranslatorService:
             text = text[:4500]
             translated = self.translator.translate(text)
             return translated if translated else text
-        except Exception as e:
+        except Exception:
             return text
 
     def translate(self, text, target="en"):
         if not text or len(text.strip()) < 2:
             return text
         try:
-            translator = GoogleTranslator(source="auto", target=target)
-            translated = translator.translate(text[:4500])
+            if target not in self._translators:
+                self._translators[target] = GoogleTranslator(source="auto", target=target)
+            translated = self._translators[target].translate(text[:4500])
             return translated if translated else text
-        except Exception as e:
+        except Exception:
             return text
 
     def detect_language(self, text):
@@ -111,15 +113,15 @@ if __name__ == "__main__":
 
     tests = [
         "Modi ji has done great work",
-        "मोदी जी ने बहुत अच्छा काम किया",
+        "\u092e\u094b\u0926\u0940 \u091c\u0940 \u0928\u0947 \u092c\u0939\u0941\u0924 \u0905\u091a\u094d\u091b\u093e \u0915\u093e\u092e \u0915\u093f\u092f\u093e",
         "Ye har rajya mai chunaav jitna chahte hai",
         "Sarkar bahut buri hai desh ka kuch nahi ho raha",
-        "நல்ல வேலை செய்கிறார்கள்",
+        "\u0ba8\u0bb2\u0bcd\u0bb2 \u0bb5\u0bc7\u0bb2\u0bc8 \u0b9a\u0bc6\u0baf\u0bcd\u0b95\u0bbf\u0bb1\u0bbe\u0bb0\u0bcd\u0b95\u0bb3\u0bcd",
         "Government is corrupt and useless",
         "Tum logo ko des mai jaghe nahi milegi",
     ]
 
-    print("\n🌐 Language Detection Tests:\n")
+    print("\n  Language Detection Tests:\n")
     for text in tests:
         lang = t.detect_language(text)
         print(f"  [{lang:>7}] {text[:60]}")

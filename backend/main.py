@@ -3,35 +3,68 @@
 Sentiment Analysis Engine — FastAPI Server
 India Innovates 2026
 """
-from fastapi import FastAPI
+import os
+import re
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from config import validate_config
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags, entities, and URL artifacts from scraped text."""
+    if not text:
+        return text
+    # Remove full anchor tags including content that looks like encoded URLs
+    clean = re.sub(r'<a\s[^>]*>.*?</a>', '', text, flags=re.DOTALL)
+    # Remove any remaining HTML tags
+    clean = re.sub(r'<[^>]+>', ' ', clean)
+    # Decode common HTML entities
+    clean = re.sub(r'&nbsp;', ' ', clean)
+    clean = re.sub(r'&amp;', '&', clean)
+    clean = re.sub(r'&lt;', '<', clean)
+    clean = re.sub(r'&gt;', '>', clean)
+    clean = re.sub(r'&quot;', '"', clean)
+    clean = re.sub(r'&#39;', "'", clean)
+    clean = re.sub(r'&#\d+;', '', clean)
+    # Remove long base64-like strings (from Google News RSS URLs)
+    clean = re.sub(r'[A-Za-z0-9_\-]{60,}', '', clean)
+    # Collapse whitespace
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
+
+
+_alert_executor = ThreadPoolExecutor(max_workers=1)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     print("\n" + "=" * 55)
-    print("  🚀 SENTIMENT ANALYSIS ENGINE")
+    print("  SENTIMENT ANALYSIS ENGINE")
     print("  India Innovates 2026")
     print("=" * 55 + "\n")
 
-    # Validate API keys
     validate_config()
 
-    # Initialize NLP models (loaded once, shared across requests)
-    print("\n🧠 Loading NLP models...")
-    from nlp.sentiment import SentimentAnalyzer
-    from api import sentiment_routes
-    sentiment_routes.analyzer = SentimentAnalyzer()
+    print("\n  Loading all services (one-time)...")
+    from services import Services
+    Services.initialize()
 
-    print("\n✅ Server ready! Open http://localhost:8000\n")
+    # Share analyzer with sentiment_routes for backward compatibility
+    from api import sentiment_routes
+    sentiment_routes.analyzer = Services.analyzer
+
+    print("\n  Server ready! Open http://localhost:8000\n")
 
     yield
 
-    print("\n🛑 Shutting down...")
+    print("\n  Shutting down...")
+    _alert_executor.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -50,7 +83,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── ROUTES ──
+# -- ROUTES --
 from api.dashboard_routes import router as dashboard_router
 from api.sentiment_routes import router as sentiment_router
 from api.map_routes import router as map_router
@@ -62,7 +95,7 @@ app.include_router(map_router)
 app.include_router(alert_router)
 
 
-# ── ROOT ENDPOINTS ──
+# -- ROOT ENDPOINTS --
 
 @app.get("/")
 def root():
@@ -78,102 +111,54 @@ def root():
 @app.get("/health")
 def health():
     from database.mongo_client import db
+    from services import Services
     return {
         "status": "healthy",
         "database": "connected" if db.ping() else "disconnected",
+        "services_ready": Services.is_ready(),
         "stats": db.get_stats()
     }
 
 
-@app.get("/api/scrape-and-analyze")
-def scrape_and_analyze(keywords: str = "Modi government"):
-    """
-    Full pipeline: Scrape → Analyze → Save → Return results
-    Use this to populate data!
-    """
-    from scrapers.scraper_manager import ScraperManager
-    from nlp.sentiment import SentimentAnalyzer
-    from nlp.topics import TopicExtractor
-    from nlp.translator import TranslatorService
-    from geo.constituency_mapper import ConstituencyMapper
-    from geo.booth_mapper import BoothMapper
+# -- PIPELINE ENDPOINTS (using shared Services) --
+
+def _run_pipeline_sync(keyword_list):
+    """Run the full pipeline using shared service instances."""
+    from services import Services
     from database.mongo_client import db
+    from cache import cache
 
-    keyword_list = [k.strip() for k in keywords.split(",")]
-
-    # Step 1: Scrape
-    print("\n" + "=" * 50)
-    print("📡 Step 1: Scraping data...")
-    print("=" * 50)
-    manager = ScraperManager()
-    raw_data, scrape_stats = manager.scrape_all(keywords=keyword_list)
+    raw_data, scrape_stats = Services.scraper_manager.scrape_all(keywords=keyword_list)
 
     if not raw_data:
         return {"error": "No data scraped", "stats": scrape_stats}
 
-    # Save raw data
     db.save_raw_data("mixed", raw_data)
 
-    # Step 2: Analyze sentiment
-    print("\n" + "=" * 50)
-    print("🧠 Step 2: Analyzing sentiment...")
-    print("=" * 50)
-    analyzer = SentimentAnalyzer()
-    texts = [item["text"] for item in raw_data if item.get("text")]
-    sentiment_results = analyzer.analyze_batch(texts)
+    texts = [_strip_html(item["text"]) for item in raw_data if item.get("text")]
 
-    # Step 3: Extract topics
-    print("\n" + "=" * 50)
-    print("🏷️ Step 3: Extracting topics...")
-    print("=" * 50)
-    topic_extractor = TopicExtractor()
+    # Pre-detect languages once for all texts
+    languages = [Services.translator.detect_language(t) for t in texts]
 
-    # Step 4: Map to constituencies
-    print("\n" + "=" * 50)
-    print("📍 Step 4: Mapping to constituencies...")
-    print("=" * 50)
-    mapper = ConstituencyMapper()
-    booth_mapper = BoothMapper()
+    sentiment_results = Services.analyzer.analyze_batch(texts, languages=languages)
 
-    # Step 5: Detect languages
-    print("\n" + "=" * 50)
-    print("🌐 Step 5: Detecting languages...")
-    print("=" * 50)
-    translator = TranslatorService()
-
-    # Step 6: Combine and save
-    print("\n" + "=" * 50)
-    print("💾 Step 6: Saving results...")
-    print("=" * 50)
-    saved_count = 0
+    # Batch build documents
+    batch_docs = []
     constituency_counts = {}
 
     for i, result in enumerate(sentiment_results):
-        # Find matching raw data
         raw_item = raw_data[i] if i < len(raw_data) else {}
+        language = result.get("language", languages[i] if i < len(languages) else "unknown")
 
-        # Extract topics (translate Hindi first for better topics)
-        topics = topic_extractor.extract_topics(result["text"], top_n=3)
-
-        # Map constituency (improved — checks more keywords)
-        constituency = mapper.map_text_to_constituency(
-            result["text"],
-            raw_item.get("location", "")
+        topics = Services.topic_extractor.extract_topics(result["text"], top_n=3, language=language)
+        constituency = Services.mapper.map_text_to_constituency(
+            result["text"], raw_item.get("location", "")
         )
+        booth = Services.booth_mapper.assign_booth(constituency) if constituency != "unknown" else "unknown"
 
-        # Detect language (improved — catches Hinglish)
-        language = translator.detect_language(result["text"])
-
-        # Assign booth if constituency is known
-        booth = "unknown"
-        if constituency != "unknown":
-            booth = booth_mapper.assign_booth(constituency)
-
-        # Track constituency distribution
         constituency_counts[constituency] = constituency_counts.get(constituency, 0) + 1
 
-        # Build final document
-        doc = {
+        batch_docs.append({
             "text": result["text"],
             "source": raw_item.get("source", "unknown"),
             "sentiment": result["sentiment"],
@@ -183,74 +168,55 @@ def scrape_and_analyze(keywords: str = "Modi government"):
             "topics": topics,
             "entities": [],
             "constituency": constituency,
-            "booth": booth
-        }
+            "booth": booth,
+            "analyzed_at": datetime.utcnow()
+        })
 
-        db.save_sentiment(doc)
-        saved_count += 1
+    # Single batch insert instead of N individual inserts
+    db.save_sentiments_batch(batch_docs)
+    saved_count = len(batch_docs)
 
-    # Print constituency mapping results
-    print("\n📍 Constituency Mapping Results:")
-    for c, count in sorted(constituency_counts.items(), key=lambda x: x[1], reverse=True):
-        emoji = "✅" if c != "unknown" else "❓"
-        print(f"   {emoji} {c}: {count} items")
+    # Invalidate dashboard cache after new data
+    cache.invalidate()
 
-    mapped_count = sum(v for k, v in constituency_counts.items() if k != "unknown")
-    total_count = sum(constituency_counts.values())
-    mapping_pct = (mapped_count / total_count * 100) if total_count > 0 else 0
-    print(f"\n   📊 Mapped: {mapped_count}/{total_count} ({mapping_pct:.1f}%)")
-
-    # Check for spikes and send alerts
-    print("\n" + "=" * 50)
-    print("🚨 Step 7: Checking for sentiment spikes...")
-    print("=" * 50)
+    # Check for spikes
+    alert_count = 0
     try:
         from alerts.spike_detector import SpikeDetector
         detector = SpikeDetector(db)
         alerts = detector.check_for_spikes()
         alert_count = len(alerts)
     except Exception as e:
-        print(f"   ⚠️ Spike detection skipped: {e}")
-        alert_count = 0
+        print(f"  Spike detection skipped: {e}")
 
-    # Generate AI summary
-    print("\n" + "=" * 50)
-    print("📝 Step 8: Generating AI summary...")
-    print("=" * 50)
+    # AI summary
     ai_summary = ""
     try:
-        from nlp.summarizer import Summarizer
-        summarizer = Summarizer()
-
-        # Build summary data
         summary = db.get_sentiment_summary(hours=1)
         topics_data = db.get_trending_topics(limit=5, hours=1)
-        
+
         summary_text = f"""
         Total analyzed: {summary['total']}
         Positive: {summary['positive']} ({summary['positive']/max(summary['total'],1)*100:.0f}%)
         Negative: {summary['negative']} ({summary['negative']/max(summary['total'],1)*100:.0f}%)
         Neutral: {summary['neutral']} ({summary['neutral']/max(summary['total'],1)*100:.0f}%)
-        
         Top constituencies: {', '.join(f"{k}({v})" for k, v in list(constituency_counts.items())[:5])}
         Top topics: {', '.join(t['_id'] for t in topics_data[:5]) if topics_data else 'None'}
         """
 
-        ai_summary = summarizer.summarize_sentiments(summary_text)
-        print(f"   📝 AI Summary generated!")
+        ai_summary = Services.summarizer.summarize_sentiments(summary_text)
     except Exception as e:
-        print(f"   ⚠️ AI summary skipped: {e}")
+        print(f"  AI summary skipped: {e}")
         ai_summary = "Summary not available"
 
-    # Send Telegram notification
+    # Non-blocking Telegram notification
     try:
         from alerts.telegram_alert import TelegramAlerter
         alerter = TelegramAlerter()
-        
         summary_data = db.get_sentiment_summary(hours=1)
         topics_data = db.get_trending_topics(limit=5, hours=1)
-        
-        alerter.send_daily_summary({
+
+        _alert_executor.submit(alerter.send_daily_summary, {
             "positive": summary_data["positive"],
             "negative": summary_data["negative"],
             "neutral": summary_data["neutral"],
@@ -258,25 +224,14 @@ def scrape_and_analyze(keywords: str = "Modi government"):
             "top_topics": [{"name": t["_id"], "count": t["count"]} for t in topics_data[:5]],
             "hotspot": list(constituency_counts.keys())[0] if constituency_counts else "N/A"
         })
-        print("   📱 Telegram summary sent!")
     except Exception as e:
-        print(f"   ⚠️ Telegram notification skipped: {e}")
+        print(f"  Telegram notification skipped: {e}")
 
-    # Final summary
+    mapped_count = sum(v for k, v in constituency_counts.items() if k != "unknown")
+    total_count = sum(constituency_counts.values())
+    mapping_pct = (mapped_count / total_count * 100) if total_count > 0 else 0
+
     final_summary = db.get_sentiment_summary(hours=1)
-
-    print("\n" + "=" * 50)
-    print("✅ PIPELINE COMPLETE!")
-    print("=" * 50)
-    print(f"   📡 Scraped: {len(raw_data)} items")
-    print(f"   🧠 Analyzed: {len(sentiment_results)} items")
-    print(f"   💾 Saved: {saved_count} items")
-    print(f"   📍 Mapped: {mapped_count}/{total_count} ({mapping_pct:.1f}%)")
-    print(f"   🚨 Alerts: {alert_count}")
-    print(f"   😊 Positive: {final_summary['positive']}")
-    print(f"   😡 Negative: {final_summary['negative']}")
-    print(f"   😐 Neutral: {final_summary['neutral']}")
-    print("=" * 50)
 
     return {
         "success": True,
@@ -293,46 +248,43 @@ def scrape_and_analyze(keywords: str = "Modi government"):
     }
 
 
+@app.get("/api/scrape-and-analyze")
+def scrape_and_analyze(keywords: str = "Modi government"):
+    """Full pipeline: Scrape -> Analyze -> Save -> Return results"""
+    keyword_list = [k.strip() for k in keywords.split(",")]
+    return _run_pipeline_sync(keyword_list)
+
+
 @app.get("/api/scrape-source")
 def scrape_single_source(source: str = "reddit", keywords: str = "Modi government"):
     """Scrape from a single source"""
-    from scrapers.scraper_manager import ScraperManager
-    from nlp.sentiment import SentimentAnalyzer
-    from nlp.topics import TopicExtractor
-    from nlp.translator import TranslatorService
-    from geo.constituency_mapper import ConstituencyMapper
+    from services import Services
     from database.mongo_client import db
+    from cache import cache
 
     keyword_list = [k.strip() for k in keywords.split(",")]
 
-    manager = ScraperManager()
-    data = manager.scrape_single_source(source, keywords=keyword_list)
+    data = Services.scraper_manager.scrape_single_source(source, keywords=keyword_list)
 
     if not data:
         return {"error": f"No data from {source}", "count": 0}
 
-    # Save raw
     db.save_raw_data(source, data)
 
-    # Analyze
-    analyzer = SentimentAnalyzer()
-    topic_extractor = TopicExtractor()
-    translator = TranslatorService()
-    mapper = ConstituencyMapper()
+    texts = [_strip_html(item["text"]) for item in data if item.get("text")]
+    languages = [Services.translator.detect_language(t) for t in texts]
+    results = Services.analyzer.analyze_batch(texts, languages=languages)
 
-    texts = [item["text"] for item in data if item.get("text")]
-    results = analyzer.analyze_batch(texts)
-
-    saved = 0
+    batch_docs = []
     for i, result in enumerate(results):
         raw_item = data[i] if i < len(data) else {}
-        topics = topic_extractor.extract_topics(result["text"], top_n=3)
-        constituency = mapper.map_text_to_constituency(
+        language = result.get("language", languages[i] if i < len(languages) else "unknown")
+        topics = Services.topic_extractor.extract_topics(result["text"], top_n=3, language=language)
+        constituency = Services.mapper.map_text_to_constituency(
             result["text"], raw_item.get("location", "")
         )
-        language = translator.detect_language(result["text"])
 
-        doc = {
+        batch_docs.append({
             "text": result["text"],
             "source": source,
             "sentiment": result["sentiment"],
@@ -342,10 +294,12 @@ def scrape_single_source(source: str = "reddit", keywords: str = "Modi governmen
             "topics": topics,
             "entities": [],
             "constituency": constituency,
-            "booth": "unknown"
-        }
-        db.save_sentiment(doc)
-        saved += 1
+            "booth": "unknown",
+            "analyzed_at": datetime.utcnow()
+        })
+
+    db.save_sentiments_batch(batch_docs)
+    cache.invalidate()
 
     summary = db.get_sentiment_summary(hours=1)
 
@@ -354,7 +308,7 @@ def scrape_single_source(source: str = "reddit", keywords: str = "Modi governmen
         "source": source,
         "scraped": len(data),
         "analyzed": len(results),
-        "saved": saved,
+        "saved": len(batch_docs),
         "sentiment_summary": summary
     }
 
@@ -363,21 +317,38 @@ def scrape_single_source(source: str = "reddit", keywords: str = "Modi governmen
 def clear_all_data():
     """Clear all data — USE ONLY FOR TESTING"""
     from database.mongo_client import db
+    from cache import cache
     db.clear_all()
+    cache.invalidate()
     return {"message": "All data cleared!", "status": "empty"}
+
+
+@app.get("/api/clean-html")
+def clean_html_in_db():
+    """Strip HTML tags, entities, and URL garbage from all stored sentiment text"""
+    from database.mongo_client import db
+    count = 0
+    for doc in db.sentiments.find({"$or": [
+        {"text": {"$regex": "<[a-zA-Z].*?>"}},
+        {"text": {"$regex": "&nbsp;"}},
+        {"text": {"$regex": "[A-Za-z0-9_\\-]{60,}"}},
+    ]}):
+        clean = _strip_html(doc["text"])
+        if clean != doc["text"]:
+            db.sentiments.update_one({"_id": doc["_id"]}, {"$set": {"text": clean}})
+            count += 1
+    return {"cleaned": count}
 
 
 @app.get("/api/generate-report")
 def generate_report(constituency: str = ""):
     """Generate AI report for a constituency or overall"""
-    from nlp.summarizer import Summarizer
+    from services import Services
     from database.mongo_client import db
-
-    summarizer = Summarizer()
 
     if constituency:
         summary = db.get_sentiment_summary(constituency=constituency, hours=24)
-        report = summarizer.generate_constituency_report(constituency, str(summary))
+        report = Services.summarizer.generate_constituency_report(constituency, str(summary))
         return {
             "constituency": constituency,
             "sentiment": summary,
@@ -394,7 +365,7 @@ def generate_report(constituency: str = ""):
         Constituencies: {constituencies[:5]}
         """
 
-        report = summarizer.summarize_sentiments(data_str)
+        report = Services.summarizer.summarize_sentiments(data_str)
         return {
             "overall_sentiment": summary,
             "top_topics": topics[:10],
@@ -403,8 +374,9 @@ def generate_report(constituency: str = ""):
         }
 
 
-# ── RUN ──
+# -- RUN --
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=debug)
